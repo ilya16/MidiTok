@@ -31,7 +31,8 @@ ADDITIONAL_TOKENS_TEST = {'Chord': False,  # set to false to speed up tests as i
                           'rest_range': (4, 16),
                           'nb_tempos': 32,
                           'tempo_range': (40, 250),
-                          'time_signature_range': (16, 2)}
+                          'time_signature_range': {4: (3, 4)},
+                          'nb_beats': 8}
 
 
 def test_one_track_midi_to_tokens_to_midi(data_path: Union[str, Path, PurePath] = './tests/Maestro_MIDIs',

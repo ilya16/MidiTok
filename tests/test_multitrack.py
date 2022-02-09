@@ -37,7 +37,8 @@ ADDITIONAL_TOKENS_TEST = {'Chord': True,
                           'rest_range': (4, 1024),  # very high value to cover every possible rest in the test files
                           'nb_tempos': 32,
                           'tempo_range': (40, 250),
-                          'time_signature_range': (16, 2)}
+                          'time_signature_range': {4: (3, 4)},
+                          'nb_beats': 8}
 
 
 def test_multitrack_midi_to_tokens_to_midi(data_path: Union[str, Path, PurePath] = './tests/Multitrack_MIDIs',
