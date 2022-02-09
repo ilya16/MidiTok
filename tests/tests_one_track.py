@@ -31,8 +31,7 @@ ADDITIONAL_TOKENS_TEST = {'Chord': False,  # set to false to speed up tests as i
                           'rest_range': (4, 16),
                           'nb_tempos': 32,
                           'tempo_range': (40, 250),
-                          'time_signature_range': {4: (3, 4)},
-                          'nb_beats': 8}
+                          'time_signature_range': {4: (3, 4)}}
 
 
 def one_track_midi_to_tokens_to_midi(data_path: Union[str, Path, PurePath] = './Maestro_MIDIs',
@@ -45,7 +44,7 @@ def one_track_midi_to_tokens_to_midi(data_path: Union[str, Path, PurePath] = './
     :param saving_erroneous_midis: will save MIDIs converted back with errors, to be used to debug
     """
     encodings = ['MIDILike', 'Structured', 'REMI', 'CPWord', 'Octuple',
-                 'OctupleMono', 'MuMIDI']
+                 'OctupleM', 'OctupleMono', 'MuMIDI']
     files = list(Path(data_path).glob('**/*.mid'))
     t0 = time.time()
 
@@ -78,10 +77,10 @@ def one_track_midi_to_tokens_to_midi(data_path: Union[str, Path, PurePath] = './
             # Convert back tokens into a track object
             tempo_changes = None
             time_sig_changes = None
-            if encoding == 'Octuple' or encoding == 'MuMIDI':
+            if encoding == 'Octuple' or encoding == 'OctupleM' or encoding == 'MuMIDI':
                 new_midi = tokenizer.tokens_to_midi(tokens, time_division=midi.ticks_per_beat)
                 track = new_midi.instruments[0]
-                if encoding == 'Octuple':
+                if encoding == 'Octuple' or encoding == 'OctupleM':
                     tempo_changes = new_midi.tempo_changes
                     time_sig_changes = new_midi.time_signature_changes
             else:
