@@ -26,16 +26,17 @@ class Octuple(MIDITokenizer):
     :param nb_velocities: number of velocity bins
     :param additional_tokens: specifies additional tokens (time signature, tempo)
     :param sos_eos_tokens: adds Start Of Sequence (SOS) and End Of Sequence (EOS) tokens to the vocabulary
+    :param mask_token: adds Mask (MASK) token to the vocabulary
     :param params: can be a path to the parameter (json encoded) file or a dictionary
     """
     def __init__(self, pitch_range: range = PITCH_RANGE, beat_res: Dict[Tuple[int, int], int] = BEAT_RES,
                  nb_velocities: int = NB_VELOCITIES, additional_tokens: Dict[str, bool] = ADDITIONAL_TOKENS,
-                 sos_eos_tokens: bool = False, params=None):
+                 sos_eos_tokens: bool = False, mask_token: bool = False, params=None):
         additional_tokens['Chord'] = False  # Incompatible additional token
         additional_tokens['Rest'] = False
         # used in place of positional encoding
         self.max_bar_embedding = 60  # this attribute might increase during encoding
-        super().__init__(pitch_range, beat_res, nb_velocities, additional_tokens, sos_eos_tokens, params)
+        super().__init__(pitch_range, beat_res, nb_velocities, additional_tokens, sos_eos_tokens, mask_token, params)
 
     def save_params(self, out_dir: Union[str, Path, PurePath]):
         """ Override the parent class method to include additional parameter drum pitch range
@@ -305,12 +306,13 @@ class Octuple(MIDITokenizer):
         """
         raise NotImplementedError('tokens_to_track not implemented for Octuple, use tokens_to_midi instead')
 
-    def _create_vocabulary(self, sos_eos_tokens: bool = False) -> Vocabulary:
+    def _create_vocabulary(self, sos_eos_tokens: bool = False, mask_token: bool = False) -> Vocabulary:
         """ Creates the Vocabulary object of the tokenizer.
         See the docstring of the Vocabulary class for more details about how to use it.
         NOTE: token index 0 is often used as a padding index during training
 
         :param sos_eos_tokens: will include Start Of Sequence (SOS) and End Of Sequence (tokens)
+        :param mask_token: will include Mask (MASK) token
         :return: the vocabulary object
         """
         vocab = Vocabulary({'PAD_None': 0})
@@ -343,6 +345,10 @@ class Octuple(MIDITokenizer):
         # SOS & EOS
         if sos_eos_tokens:
             vocab.add_sos_eos()
+
+        # MASK
+        if mask_token:
+            vocab.add_mask()
 
         # BAR --- MUST BE LAST IN DIC AS THIS MIGHT BE INCREASED
         vocab.add_event('Bar_None')  # new bar token

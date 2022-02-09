@@ -29,12 +29,13 @@ class MIDITokenizer:
     :param nb_velocities: number of velocity bins
     :param additional_tokens: specifies additional tokens (chords, rests, tempo, time signature...)
     :param sos_eos_tokens: adds Start Of Sequence (SOS) and End Of Sequence (EOS) tokens to the vocabulary
+    :param mask_token: adds Mask (MASK) token to the vocabulary
     :param params: can be a path to the parameter (json encoded) file or a dictionary
     """
 
     def __init__(self, pitch_range: range, beat_res: Dict[Tuple[int, int], int], nb_velocities: int,
                  additional_tokens: Dict[str, Union[bool, int, Tuple[int, int]]], sos_eos_tokens: bool = False,
-                 params: Union[str, Path, PurePath, Dict[str, Any]] = None):
+                 mask_token: bool = False, params: Union[str, Path, PurePath, Dict[str, Any]] = None):
         # Initialize params
         if params is None:
             self.pitch_range = pitch_range
@@ -72,7 +73,7 @@ class MIDITokenizer:
             self.time_signatures = self.__create_time_signatures()
 
         # Vocabulary and token types graph
-        self.vocab = self._create_vocabulary(sos_eos_tokens)
+        self.vocab = self._create_vocabulary(sos_eos_tokens, mask_token)
         self.tokens_types_graph = self._create_token_types_graph()
 
         # Keep in memory durations in ticks for seen time divisions so these values

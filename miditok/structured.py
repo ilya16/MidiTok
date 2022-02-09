@@ -134,12 +134,13 @@ class Structured(MIDITokenizer):
 
         return instrument, [TempoChange(TEMPO, 0)]
 
-    def _create_vocabulary(self, sos_eos_tokens: bool = False) -> Vocabulary:
+    def _create_vocabulary(self, sos_eos_tokens: bool = False, mask_token: bool = False) -> Vocabulary:
         """ Creates the Vocabulary object of the tokenizer.
         See the docstring of the Vocabulary class for more details about how to use it.
         NOTE: token index 0 is often used as a padding index during training
 
         :param sos_eos_tokens: will include Start Of Sequence (SOS) and End Of Sequence (tokens)
+        :param mask_token: will include Mask (MASK) token
         :return: the vocabulary object
         """
         vocab = Vocabulary({'PAD_None': 0, 'Bar_None': 1})
@@ -164,6 +165,10 @@ class Structured(MIDITokenizer):
         # SOS & EOS
         if sos_eos_tokens:
             vocab.add_sos_eos()
+
+        # MASK
+        if mask_token:
+            vocab.add_mask()
 
         return vocab
 

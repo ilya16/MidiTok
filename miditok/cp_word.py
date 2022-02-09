@@ -40,18 +40,19 @@ class CPWord(MIDITokenizer):
     :param nb_velocities: number of velocity bins
     :param additional_tokens: specifies additional tokens (chords, time signature, rests, tempo...)
     :param sos_eos_tokens: adds Start Of Sequence (SOS) and End Of Sequence (EOS) tokens to the vocabulary
+    :param mask_token: adds Mask (MASK) token to the vocabulary
     :param params: can be a path to the parameter (json encoded) file or a dictionary
     """
 
     def __init__(self, pitch_range: range = PITCH_RANGE, beat_res: Dict[Tuple[int, int], int] = BEAT_RES,
                  nb_velocities: int = NB_VELOCITIES, additional_tokens: Dict[str, bool] = ADDITIONAL_TOKENS,
-                 sos_eos_tokens: bool = False, params=None):
+                 sos_eos_tokens: bool = False, mask_token: bool = False, params=None):
         # Indexes of additional token types within a compound token
         self.chord_idx = -3 if additional_tokens['Tempo'] and additional_tokens['Rest'] else -2 if \
             additional_tokens['Tempo'] or additional_tokens['Rest'] else -1
         self.rest_idx = -2 if additional_tokens['Tempo'] else -1
         self.tempo_idx = -1
-        super().__init__(pitch_range, beat_res, nb_velocities, additional_tokens, sos_eos_tokens, params)
+        super().__init__(pitch_range, beat_res, nb_velocities, additional_tokens, sos_eos_tokens, mask_token, params)
 
     def track_to_tokens(self, track: Instrument) -> List[List[int]]:
         """ Converts a track (miditoolkit.Instrument object) into a sequence of tokens
@@ -268,12 +269,13 @@ class CPWord(MIDITokenizer):
         tempo_changes[0].time = 0
         return instrument, tempo_changes
 
-    def _create_vocabulary(self, sos_eos_tokens: bool = False) -> Vocabulary:
+    def _create_vocabulary(self, sos_eos_tokens: bool = False, mask_token: bool = False) -> Vocabulary:
         """ Creates the Vocabulary object of the tokenizer.
         See the docstring of the Vocabulary class for more details about how to use it.
         NOTE: token index 0 is often used as a padding index during training
 
         :param sos_eos_tokens: will include Start Of Sequence (SOS) and End Of Sequence (tokens)
+        :param mask_token: will include Mask (MASK) token
         :return: the vocabulary object
         """
         vocab = Vocabulary({'PAD_None': 0, 'Bar_None': 1, 'Family_Note': 2, 'Family_Metric': 3})
@@ -319,6 +321,10 @@ class CPWord(MIDITokenizer):
         # SOS & EOS
         if sos_eos_tokens:
             vocab.add_sos_eos()
+
+        # MASK
+        if mask_token:
+            vocab.add_mask()
 
         return vocab
 
