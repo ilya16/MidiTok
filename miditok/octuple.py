@@ -130,9 +130,8 @@ class Octuple(MIDITokenizer):
         current_time_sig_idx = 0
         current_time_sig_tick = 0
         current_time_sig_bar = 0
-        time_sig_change = self.current_midi_metadata['time_sig_changes'][current_time_sig_idx]
-        current_time_sig = self._reduce_time_signature(time_sig_change.numerator, time_sig_change.denominator)
-        ticks_per_bar = time_division * current_time_sig[0]
+        current_time_sig = self.current_midi_metadata['time_sig_changes'][current_time_sig_idx]
+        ticks_per_bar = self.compute_ticks_per_bar(current_time_sig, time_division)
 
         for note in track.notes:
             # Positions and bars
@@ -177,18 +176,17 @@ class Octuple(MIDITokenizer):
                 # If the current time signature is not the last one
                 if current_time_sig_idx + 1 < len(self.current_midi_metadata['time_sig_changes']):
                     # Will loop over incoming time signature changes
-                    for time_sig_change in self.current_midi_metadata['time_sig_changes'][current_time_sig_idx + 1:]:
+                    for time_sig in self.current_midi_metadata['time_sig_changes'][current_time_sig_idx + 1:]:
                         # If this time signature change happened before the current moment
-                        if time_sig_change.time <= note.start:
-                            current_time_sig = self._reduce_time_signature(time_sig_change.numerator,
-                                                                           time_sig_change.denominator)
+                        if time_sig.time <= note.start:
+                            current_time_sig = time_sig
                             current_time_sig_idx += 1  # update time signature value (might not change) and index
-                            current_time_sig_bar += (time_sig_change.time - current_time_sig_tick) // ticks_per_bar
-                            current_time_sig_tick = time_sig_change.time
-                            ticks_per_bar = time_division * current_time_sig[0]
-                        elif time_sig_change.time > note.start:
+                            current_time_sig_bar += (time_sig.time - current_time_sig_tick) // ticks_per_bar
+                            current_time_sig_tick = time_sig.time
+                            ticks_per_bar = self.compute_ticks_per_bar(time_sig, time_division)
+                        elif time_sig.time > note.start:
                             break  # this time signature change is beyond the current time step, we break the loop
-                event.append(self.vocab.event_to_token[f'TimeSig_{current_time_sig[0]}/{current_time_sig[1]}'])
+                event.append(self.vocab.event_to_token[f'TimeSig_{current_time_sig.numerator}/{current_time_sig.denominator}'])
 
             events.append(event)
 
@@ -229,11 +227,11 @@ class Octuple(MIDITokenizer):
             tempo_changes = [TempoChange(TEMPO, 0)]
 
         if self.additional_tokens['TimeSignature']:
-            time_sig = self._parse_token_time_signature(self.tokens_to_events(tokens[0])[-1].value)
+            time_sig = self.parse_token_time_signature(self.tokens_to_events(tokens[0])[-1].value)
         else:  # default
             time_sig = TIME_SIGNATURE
-        ticks_per_bar = time_division * time_sig[0]
         time_sig_changes = [TimeSignature(*time_sig, 0)]
+        ticks_per_bar = self.compute_ticks_per_bar(time_sig_changes[0], time_division)
 
         current_time_sig_tick = 0
         current_time_sig_bar = 0
@@ -265,12 +263,13 @@ class Octuple(MIDITokenizer):
 
             # Time Signature, adds a TimeSignatureChange if necessary
             if self.additional_tokens['TimeSignature']:
-                time_sig = self._parse_token_time_signature(events[-1].value)
+                time_sig = self.parse_token_time_signature(events[-1].value)
                 if time_sig != (time_sig_changes[-1].numerator, time_sig_changes[-1].denominator):
                     current_time_sig_tick += (current_bar - current_time_sig_bar) * ticks_per_bar
                     current_time_sig_bar = current_bar
-                    ticks_per_bar = time_division * time_sig[0]
-                    time_sig_changes.append(TimeSignature(*time_sig, current_time_sig_tick))
+                    time_sig = TimeSignature(*time_sig, current_time_sig_tick)
+                    ticks_per_bar = self.compute_ticks_per_bar(time_sig, time_division)
+                    time_sig_changes.append(time_sig)
 
         # Tempos
         midi.tempo_changes = tempo_changes
@@ -326,8 +325,8 @@ class Octuple(MIDITokenizer):
         vocab.add_event(f'Duration_{".".join(map(str, duration))}' for duration in self.durations)
 
         # POSITION
-        _, nb_notes = self.additional_tokens.get('time_signature_range', (4, 1))
-        nb_positions = max(self.beat_res.values()) * 4 * nb_notes
+        nb_beats = self.additional_tokens.get('nb_beats', 4)
+        nb_positions = max(self.beat_res.values()) * nb_beats
         vocab.add_event(f'Position_{i}' for i in range(nb_positions))
 
         # TEMPO
