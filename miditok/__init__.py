@@ -6,6 +6,7 @@ from .cp_word import CPWord
 from .mumidi import MuMIDI
 from .octuple import Octuple
 from .octuple_mono import OctupleMono
+from .octuple_m import OctupleM
 from .bpe import bpe
 from .midi_tokenizer_base import MIDITokenizer, get_midi_programs
 from .vocabulary import Vocabulary, Event

@@ -37,8 +37,7 @@ ADDITIONAL_TOKENS_TEST = {'Chord': True,
                           'rest_range': (4, 1024),  # very high value to cover every possible rest in the test files
                           'nb_tempos': 32,
                           'tempo_range': (40, 250),
-                          'time_signature_range': {4: (3, 4)},
-                          'nb_beats': 8}
+                          'time_signature_range': {4: (3, 4)}}
 
 
 def test_multitrack_midi_to_tokens_to_midi(data_path: Union[str, Path, PurePath] = './tests/Multitrack_MIDIs',
@@ -48,7 +47,7 @@ def test_multitrack_midi_to_tokens_to_midi(data_path: Union[str, Path, PurePath]
     times quantized, and maybe a some duplicated notes removed
 
     """
-    encodings = ['REMI', 'CPWord', 'Octuple', 'OctupleMono', 'MuMIDI']
+    encodings = ['REMI', 'CPWord', 'Octuple', 'OctupleM', 'OctupleMono', 'MuMIDI']
     files = list(Path(data_path).glob('**/*.mid'))
     at_least_one_error = False
 
@@ -74,7 +73,7 @@ def test_multitrack_midi_to_tokens_to_midi(data_path: Union[str, Path, PurePath]
                     track.program = 0  # need to be done before sorting tracks per program
             # Sort and merge tracks if needed
             # MIDI produced with Octuple contains tracks ordered by program
-            if encoding == 'Octuple' or encoding == 'MuMIDI':
+            if encoding == 'Octuple' or encoding == 'OctupleM' or encoding == 'MuMIDI':
                 miditok.utils.merge_same_program_tracks(midi_to_compare.instruments)  # merge tracks
             for track in midi_to_compare.instruments:  # reduce the duration of notes to long
                 reduce_note_durations(track.notes, max(tu[1] for tu in BEAT_RES_TEST) * midi.ticks_per_beat)
