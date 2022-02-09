@@ -4,6 +4,7 @@ https://arxiv.org/abs/2106.05630
 """
 
 import json
+import math
 from pathlib import Path, PurePath
 from typing import List, Tuple, Dict, Optional, Union
 
@@ -338,8 +339,8 @@ class Octuple(MIDITokenizer):
         vocab[3].add_event(f'Program_{i}' for i in range(-1, 128))
 
         # POSITION
-        nb_beats = self.additional_tokens.get('nb_beats', 4)
-        nb_positions = max(self.beat_res.values()) * nb_beats
+        max_nb_beats = max(map(lambda ts: math.ceil(4 * ts[0] / ts[1]), self.time_signatures))
+        nb_positions = max(self.beat_res.values()) * max_nb_beats
         vocab[4].add_event(f'Position_{i}' for i in range(nb_positions))
 
         # BAR
