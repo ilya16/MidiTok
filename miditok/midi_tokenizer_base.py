@@ -68,7 +68,7 @@ class MIDITokenizer:
             self.rests = self.__create_rests()
 
         # Time Signatures
-        self.time_signatures = []
+        self.time_signatures = [TIME_SIGNATURE]
         if self.additional_tokens['TimeSignature']:
             self.time_signatures = self.__create_time_signatures()
 
