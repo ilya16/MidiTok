@@ -18,12 +18,15 @@ ADDITIONAL_TOKENS = {'Chord': False,
                      'nb_tempos': 32,  # nb of tempo bins for additional tempo tokens, quantized like velocities
                      'tempo_range': (40, 250),  # (min_tempo, max_tempo)
                      # time signature params
-                     'time_signature_range': (8, 2)}  # (max_beat_res, max_bar_length_in_NOTE)
+                     'time_signature_range': {4: 4},  # {denom_i: num_i / num_list_i / (min_num_i, max_num_i)}
+                     'nb_beats': 8}  # max number of 4th note beats for position tokens
+
 
 # Defaults values when writing new MIDI files
 TIME_DIVISION = 384  # 384 and 480 are convenient as divisible by 4, 8, 12, 16, 24, 32
 TEMPO = 120
 TIME_SIGNATURE = (4, 4)
+MIDI_BEAT_RESOLUTION = 4  # in MIDI beat resolution is 4th note
 
 CHORD_MAPS = {'min': (0, 3, 7),
               'maj': (0, 4, 7),
