@@ -648,8 +648,9 @@ class MIDITokenizer(ABC):
                 value = {tuple(map(int, beat_range.split('_'))): res for beat_range, res in value.items()}
             elif key == 'additional_tokens':
                 value['TimeSignature'] = value.get('TimeSignature', False)
-            elif key == 'nb_beats':
-                value['nb_beats'] = value.get('nb_beats', 4)
+                value['time_signature_range'] = {
+                    int(beat_res): beats for beat_res, beats in value.get('time_signature_range', {4: 4}).items()
+                }
             setattr(self, key, value)
 
         # when loading from params of miditok of previous versions
