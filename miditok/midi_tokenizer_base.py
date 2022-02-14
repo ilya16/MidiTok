@@ -406,10 +406,13 @@ class MIDITokenizer:
             if isinstance(beats, tuple):
                 min_nb_beats, max_nb_beats = beats
                 beats = [nb_beats for nb_beats in range(min_nb_beats, max_nb_beats + 1)]
+                time_signature_range[beat_res] = beats
             elif not isinstance(beats, list):
                 beats = beats if isinstance(beats, list) else [beats]
 
             time_signatures.extend([(nb_beats, beat_res) for nb_beats in beats])
+
+        self.additional_tokens['time_signature_range'] = time_signature_range
 
         return time_signatures
 
