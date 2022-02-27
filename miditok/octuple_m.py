@@ -2,10 +2,10 @@
 https://arxiv.org/abs/2106.05630
 
 """
-
+import json
 import math
 from fractions import Fraction
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import List, Tuple, Dict, Optional, Union
 
 import numpy as np
@@ -37,6 +37,24 @@ class OctupleM(Octuple):
         super().__init__(pitch_range, beat_res, nb_velocities, additional_tokens, sos_eos_tokens, mask_token, params)
         self._compute_token_type_order()
         self.fill_unperformed_notes = True
+
+    def save_params(self, out_dir: Union[str, Path, PurePath]):
+        """ Override the parent class method to include additional parameter drum pitch range
+        Saves the base parameters of this encoding in a txt file
+        Useful to keep track of how a dataset has been tokenized / encoded
+        It will also save the name of the class used, i.e. the encoding strategy
+
+        :param out_dir: output directory to save the file
+        """
+        Path(out_dir).mkdir(parents=True, exist_ok=True)
+        with open(PurePath(out_dir, 'config').with_suffix(".txt"), 'w') as outfile:
+            json.dump({'pitch_range': (self.pitch_range.start, self.pitch_range.stop),
+                       'beat_res': {f'{k1}_{k2}': v for (k1, k2), v in self.beat_res.items()},
+                       'nb_velocities': len(self.velocities) - 1,
+                       'additional_tokens': self.additional_tokens,
+                       'encoding': self.__class__.__name__,
+                       'max_bar_embedding': self.max_bar_embedding},
+                      outfile)
 
     def midi_to_tokens(self, midi: MidiFile) -> List[List[int]]:
         """ Override the parent class method
