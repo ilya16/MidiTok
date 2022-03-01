@@ -37,6 +37,7 @@ class OctupleM(Octuple):
         super().__init__(pitch_range, beat_res, nb_velocities, additional_tokens, sos_eos_tokens, mask_token, params)
         self._compute_token_type_order()
         self.fill_unperformed_notes = True
+        self.remove_duplicates = False
 
     def save_params(self, out_dir: Union[str, Path, PurePath]):
         """ Override the parent class method to include additional parameter drum pitch range
@@ -53,7 +54,8 @@ class OctupleM(Octuple):
                        'nb_velocities': len(self.velocities) - 1,
                        'additional_tokens': self.additional_tokens,
                        'encoding': self.__class__.__name__,
-                       'max_bar_embedding': self.max_bar_embedding},
+                       'max_bar_embedding': self.max_bar_embedding,
+                       'remove_duplicates': self.remove_duplicates},
                       outfile)
 
     def midi_to_tokens(self, midi: MidiFile) -> List[List[int]]:
