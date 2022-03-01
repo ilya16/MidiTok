@@ -115,11 +115,14 @@ class OctupleM(Octuple):
         # Process anacrusis if any
         for m in midi.markers:
             if m.text.startswith('Anacrusis'):
-                midi.time_signature_changes = midi.time_signature_changes[1:]
+                num, denom = map(int, m.text.split('_')[-1].split('/'))
+                time_sig = midi.time_signature_changes[0]
+                if (num, denom) != (time_sig.numerator, time_sig.denominator):
+                    midi.time_signature_changes = midi.time_signature_changes[1:]
                 break
 
         # Insert unperformed notes on a new track
-        if self.fill_unperformed_notes:
+        if self.fill_unperformed_notes and midi.instruments[-1].name != 'Unperformed Notes':
             notes = []
             for m in midi.markers:
                 if m.text.startswith('NoteS'):
