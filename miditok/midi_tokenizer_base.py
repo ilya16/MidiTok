@@ -84,6 +84,9 @@ class MIDITokenizer:
         # MIDI (being parsed) so that methods processing tracks can access them
         self.current_midi_metadata = {}  # needs to be updated each time a MIDI is read
 
+        # Remove duplicated notes during prerocessing
+        self.remove_duplicates = True
+
     def midi_to_tokens(self, midi: MidiFile) -> List[List[Union[int, List[int]]]]:
         """ Converts a MIDI file in a tokens representation.
         NOTE: if you override this method, be sure to keep the first lines in your method
@@ -124,7 +127,8 @@ class MIDITokenizer:
         while t < len(midi.instruments):
             self.quantize_notes(midi.instruments[t].notes, midi.ticks_per_beat)  # quantize notes attributes
             midi.instruments[t].notes.sort(key=lambda x: (x.start, x.pitch, x.end))  # sort notes
-            remove_duplicated_notes(midi.instruments[t].notes)  # remove possible duplicated notes
+            if self.remove_duplicates:
+                remove_duplicated_notes(midi.instruments[t].notes)  # remove possible duplicated notes
             if len(midi.instruments[t].notes) == 0:
                 del midi.instruments[t]
                 continue
