@@ -2,6 +2,7 @@
 https://arxiv.org/abs/2106.05630
 
 """
+import copy
 import json
 import math
 from fractions import Fraction
@@ -27,15 +28,18 @@ class OctupleM(Octuple):
             The values are the resolution, in samples per beat, of the given range, ex 8
     :param nb_velocities: number of velocity bins
     :param additional_tokens: specifies additional tokens (time signature, tempo)
+    :param absolute_token_ids: encode token ids in Vocabulary absolute values instead of token type ids
     :param sos_eos_tokens: adds Start Of Sequence (SOS) and End Of Sequence (EOS) tokens to the vocabulary
     :param mask_token: adds Mask (MASK) token to the vocabulary
     :param params: can be a path to the parameter (json encoded) file or a dictionary
     """
     def __init__(self, pitch_range: range = PITCH_RANGE, beat_res: Dict[Tuple[int, int], int] = BEAT_RES,
                  nb_velocities: int = NB_VELOCITIES, additional_tokens: Dict[str, bool] = ADDITIONAL_TOKENS,
-                 sos_eos_tokens: bool = False, mask_token: bool = False, params=None):
+                 absolute_token_ids: bool = False, sos_eos_tokens: bool = False, mask_token: bool = False, params=None):
         super().__init__(pitch_range, beat_res, nb_velocities, additional_tokens, sos_eos_tokens, mask_token, params)
-        self._compute_token_type_order()
+        self._compute_token_types_indexes()
+
+        self.absolute_token_ids = absolute_token_ids
         self.fill_unperformed_notes = True
         self.remove_duplicates = False
 
@@ -55,6 +59,7 @@ class OctupleM(Octuple):
                        'additional_tokens': self.additional_tokens,
                        'encoding': self.__class__.__name__,
                        'max_bar_embedding': self.max_bar_embedding,
+                       'absolute_token_ids': self.absolute_token_ids,
                        'remove_duplicates': self.remove_duplicates},
                       outfile)
 
@@ -63,11 +68,11 @@ class OctupleM(Octuple):
         Converts a MIDI file in a tokens representation, a sequence of "time steps".
         A time step is a list of tokens where:
             (list index: token type)
-            0: Pitch
-            1: Velocity
-            2: Duration
-            3: Bar
-            4: Position
+            0: Bar
+            1: Position
+            2: Pitch
+            3: Velocity
+            4: Duration
             (5: Tempo)
             (6: TimeSignature)
             (7: Program (track))
@@ -100,11 +105,14 @@ class OctupleM(Octuple):
         for track in midi.instruments:
             tokens += self.track_to_tokens(track)
 
-        tokens.sort(key=lambda x: (x[0].time, x[0].desc, x[0].value))  # Sort by time then track then pitch
+        tokens.sort(key=lambda x: (x[2].time, x[2].desc, x[2].value))  # Sort by time then track then pitch
 
         # Convert pitch events into tokens
         for time_step in tokens:
-            time_step[0] = self.vocab.event_to_token[f'{time_step[0].type}_{time_step[0].value}']
+            time_step[2] = self.vocab.event_to_token[f'{time_step[2].type}_{time_step[2].value}']
+
+        if not self.absolute_token_ids:
+            tokens = self.to_type_ids(tokens, inplace=True)  # encoding works only with absolute ids
 
         return tokens
 
@@ -141,11 +149,11 @@ class OctupleM(Octuple):
         """ Converts a track (miditoolkit.Instrument object) into a sequence of tokens
         A time step is a list of tokens where:
             (list index: token type)
-            0: Pitch (as an Event object for sorting purpose afterwards)
-            1: Velocity
-            2: Duration
-            3: Bar
-            4: Position
+            0: Bar
+            1: Position
+            2: Pitch (as an Event object for sorting purpose afterwards)
+            3: Velocity
+            4: Duration
             (5: Tempo)
             (6: TimeSignature)
             (7: Program (track))
@@ -191,12 +199,12 @@ class OctupleM(Octuple):
             # Note attributes
             duration = note.end - note.start
             dur_index = np.argmin(np.abs(dur_bins - duration))
-            event = [Event(type_='Pitch', time=note.start, value=note.pitch,
+            event = [self.vocab.event_to_token[f'Bar_{current_bar}'],
+                     self.vocab.event_to_token[f'Position_{current_pos}'],
+                     Event(type_='Pitch', time=note.start, value=note.pitch,
                            desc=-1 if track.is_drum else track.program),
                      self.vocab.event_to_token[f'Velocity_{note.velocity}'],
-                     self.vocab.event_to_token[f'Duration_{".".join(map(str, self.durations[dur_index]))}'],
-                     self.vocab.event_to_token[f'Bar_{current_bar}'],
-                     self.vocab.event_to_token[f'Position_{current_pos}']]
+                     self.vocab.event_to_token[f'Duration_{".".join(map(str, self.durations[dur_index]))}']]
 
             # (Tempo)
             if self.additional_tokens['Tempo']:
@@ -268,15 +276,18 @@ class OctupleM(Octuple):
         midi = MidiFile(ticks_per_beat=time_division)
         ticks_per_sample = time_division // max(self.beat_res.values())
 
+        if not self.absolute_token_ids:
+            tokens = self.to_absolute_ids(tokens, inplace=False)  # decoding works only with absolute ids
+
         events = self.tokens_to_events(tokens[0])
         if self.additional_tokens['Tempo']:
-            tempo = int(events[self.token_type_order['Tempo']].value)
+            tempo = int(events[self.token_types_order['Tempo']].value)
         else:  # default
             tempo = TEMPO
         tempo_changes = [TempoChange(tempo, 0)]
 
         if self.additional_tokens['TimeSignature']:
-            time_sig = self.parse_token_time_signature(events[self.token_type_order['TimeSignature']].value)
+            time_sig = self.parse_token_time_signature(events[self.token_types_order['TimeSig']].value)
         else:  # default
             time_sig = TIME_SIGNATURE
         time_sig_changes = [TimeSignature(*time_sig, 0)]
@@ -296,13 +307,13 @@ class OctupleM(Octuple):
             events = self.tokens_to_events(time_step)
 
             # Note attributes
-            pitch = int(events[self.token_type_order['Pitch']].value)
-            vel = int(events[self.token_type_order['Velocity']].value)
-            duration = self._token_duration_to_ticks(events[self.token_type_order['Duration']].value, time_division)
+            pitch = int(events[self.token_types_order['Pitch']].value)
+            vel = int(events[self.token_types_order['Velocity']].value)
+            duration = self._token_duration_to_ticks(events[self.token_types_order['Duration']].value, time_division)
 
             # Time values
-            current_bar = int(events[self.token_type_order['Bar']].value)
-            current_pos = int(events[self.token_type_order['Position']].value)
+            current_bar = int(events[self.token_types_order['Bar']].value)
+            current_pos = int(events[self.token_types_order['Position']].value)
             current_bar_tick = current_time_sig_tick + (current_bar - current_time_sig_bar) * ticks_per_bar
             current_tick = current_bar_tick + current_pos * ticks_per_sample
 
@@ -313,21 +324,21 @@ class OctupleM(Octuple):
             # Track
             program = 0
             if self.additional_tokens['Program']:
-                program = int(events[self.token_type_order['Program']].value)
+                program = int(events[self.token_types_order['Program']].value)
 
             # Append the created note
             tracks[program].append(Note(vel, pitch, current_tick, current_tick + duration))
 
             # Tempo, adds a TempoChange if necessary
             if self.additional_tokens['Tempo']:
-                tempo = int(events[self.token_type_order['Tempo']].value)
+                tempo = int(events[self.token_types_order['Tempo']].value)
                 if current_bar > current_tempo_bar and tempo != tempo_changes[-1].tempo:
                     current_tempo_bar = current_bar
                     tempo_changes.append(TempoChange(tempo, current_bar_tick))  # position at the start of the bar
 
             # Time Signature, adds a TimeSignatureChange if necessary
             if self.additional_tokens['TimeSignature']:
-                time_sig = self.parse_token_time_signature(events[self.token_type_order['TimeSignature']].value)
+                time_sig = self.parse_token_time_signature(events[self.token_types_order['TimeSig']].value)
                 if time_sig != (time_sig_changes[-1].numerator, time_sig_changes[-1].denominator):
                     current_time_sig_tick = current_bar_tick
                     current_time_sig_bar = current_bar
@@ -378,13 +389,13 @@ class OctupleM(Octuple):
         """
         vocab = Vocabulary({'PAD_None': 0})
 
-        # SOS & EOS
-        if sos_eos_tokens:
-            vocab.add_sos_eos()
-
         # MASK
         if mask_token:
             vocab.add_mask()
+
+        # SOS & EOS
+        if sos_eos_tokens:
+            vocab.add_sos_eos()
 
         # PITCH
         vocab.add_event(f'Pitch_{i}' for i in self.pitch_range)
@@ -415,38 +426,88 @@ class OctupleM(Octuple):
             vocab.add_event(f'Program_{program}' for program in range(-1, 128))
 
         # BAR --- MUST BE LAST IN DIC AS THIS MIGHT BE INCREASED
-        vocab.add_event('Bar_None')  # new bar token
         vocab.add_event(f'Bar_{i}' for i in range(self.max_bar_embedding))  # bar embeddings (positional encoding)
 
-        self._compute_token_type_order()
+        self._compute_token_types_order()
 
         return vocab
 
-    def _compute_token_type_order(self):
-        """ Creates the mapping of token types and their order in the encoding.
-
-        :return: the token type ids
-        """
-        token_type_order = {
-            'Pitch': 0,
-            'Velocity': 1,
-            'Duration': 2,
-            'Bar': 3,
-            'Position': 4,
-            'Tempo': 5 if self.additional_tokens['Tempo'] else 4
+    def _compute_token_types_order(self):
+        """ Creates the mapping of token types and their order in the encoding."""
+        token_types_order = {
+            'Bar': 0,
+            'Position': 1,
+            'Pitch': 2,
+            'Velocity': 3,
+            'Duration': 4,
         }
 
+        if self.additional_tokens['Tempo']:
+            token_types_order['Tempo'] = max(token_types_order.values()) + 1
+
         if self.additional_tokens['TimeSignature']:
-            token_type_order['TimeSignature'] = token_type_order['Tempo'] + 1
-        else:  # default
-            token_type_order['TimeSignature'] = token_type_order['Tempo']
+            token_types_order['TimeSig'] = max(token_types_order.values()) + 1
 
         if self.additional_tokens['Program']:
-            token_type_order['Program'] = token_type_order['TimeSignature'] + 1
-        else:  # default
-            token_type_order['Program'] = token_type_order['TimeSignature']
+            token_types_order['Program'] = max(token_types_order.values()) + 1
 
-        self.token_type_order = token_type_order
+        self.token_types_order = token_types_order
+
+    def _compute_token_types_indexes(self):
+        """ Computes token type index ranges for absolute and type index encodings."""
+        self._absolute_token_types_indexes = self.vocab._token_types_indexes
+
+        mask_token = 'MASK' in self._absolute_token_types_indexes
+        sos_eos_tokens = 'SOS' and 'EOS' in self._absolute_token_types_indexes
+
+        self._token_types_indexes = copy.copy(self._absolute_token_types_indexes)
+        for token_type, abs_token_indexes in self._absolute_token_types_indexes.items():
+            if token_type in self.token_types_order:
+                min_index = abs_token_indexes[0]
+                index_shift = 1 + int(mask_token) + 2 * int(token_type == 'Bar' and sos_eos_tokens)
+                self._token_types_indexes[token_type] = [idx - min_index + index_shift for idx in abs_token_indexes]
+
+    def _convert_tokens(self, tokens: List[List[int]], to_absolute: bool = False,
+                        inplace: bool = False) -> List[List[int]]:
+        """ Converts a token sequence between absolute and type ids.
+
+        :param tokens: sequence of tokens to be converted
+        :param to_absolute: convert from type to absolute ids, otherwise from absolute to type ids
+        :param inplace: modify the sequence inplace
+        :return: sequence of converted tokens
+        """
+        tokens = tokens if inplace else copy.deepcopy(tokens)
+
+        source_indexes = self._token_types_indexes if to_absolute else self._absolute_token_types_indexes
+        target_indexes = self._absolute_token_types_indexes if to_absolute else self._token_types_indexes
+
+        for token_type, token_type_index in self.token_types_order.items():
+            index_shift = target_indexes[token_type][0] - source_indexes[token_type][0]
+            for time_step in tokens:
+                if time_step[token_type_index] >= source_indexes[token_type][0]:
+                    time_step[token_type_index] += index_shift
+
+        return tokens
+
+    def to_type_ids(self, tokens: List[List[int]], inplace: bool = False) -> List[List[int]]:
+        """ Converts a token sequence with absolute token ids
+        into a token sequence with token type absolute token ids.
+
+        :param tokens: sequence of tokens to be converted
+        :param inplace: modify the sequence inplace
+        :return: sequence of converted tokens
+        """
+        return self._convert_tokens(tokens, to_absolute=False, inplace=inplace)
+
+    def to_absolute_ids(self, tokens: List[List[int]], inplace: bool = False) -> List[List[int]]:
+        """ Converts a token sequence with absolute token ids
+        into a token sequence with token type absolute token ids.
+
+        :param tokens: sequence of tokens to be converted
+        :param inplace: modify the sequence inplace
+        :return: sequence of converted tokens
+        """
+        return self._convert_tokens(tokens, to_absolute=True, inplace=inplace)
 
     def token_types_errors(self, tokens: List[List[int]]) -> float:
         """ Checks if a sequence of tokens is constituted of good token values and
@@ -466,9 +527,9 @@ class OctupleM(Octuple):
 
         for token in tokens:
             has_error = False
-            bar_value = int(self.vocab.token_to_event[token[3]].split('_')[1])
-            pos_value = int(self.vocab.token_to_event[token[4]].split('_')[1])
-            pitch_value = int(self.vocab.token_to_event[token[0]].split('_')[1])
+            bar_value = int(self.vocab.token_to_event[token[self.token_types_order['Bar']]].split('_')[1])
+            pos_value = int(self.vocab.token_to_event[token[self.token_types_order['Position']]].split('_')[1])
+            pitch_value = int(self.vocab.token_to_event[token[self.token_types_order['Pitch']]].split('_')[1])
 
             # Bar
             if bar_value < current_bar:
