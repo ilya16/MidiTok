@@ -405,7 +405,7 @@ class OctupleM(Octuple):
         vocab.add_event(f'Velocity_{i}' for i in self.velocities)
 
         # DURATION
-        self.durations = [(0, 0, self.durations[0][-1])] + self.durations  # allow 0 duration
+        self.durations = [(0, 0, 0)] + self.durations  # allow 0 duration
         vocab.add_event(f'Duration_{".".join(map(str, duration))}' for duration in self.durations)
 
         # POSITION
