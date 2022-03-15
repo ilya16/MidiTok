@@ -36,10 +36,9 @@ class OctupleM(Octuple):
     def __init__(self, pitch_range: range = PITCH_RANGE, beat_res: Dict[Tuple[int, int], int] = BEAT_RES,
                  nb_velocities: int = NB_VELOCITIES, additional_tokens: Dict[str, bool] = ADDITIONAL_TOKENS,
                  absolute_token_ids: bool = False, sos_eos_tokens: bool = False, mask_token: bool = False, params=None):
+        self.absolute_token_ids = absolute_token_ids
         super().__init__(pitch_range, beat_res, nb_velocities, additional_tokens, sos_eos_tokens, mask_token, params)
         self._compute_token_types_indexes()
-
-        self.absolute_token_ids = absolute_token_ids
         self.fill_unperformed_notes = True
         self.remove_duplicates = False
 
