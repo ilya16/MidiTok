@@ -60,8 +60,7 @@ class MIDITokenizer:
         # Tempos
         self.tempos = np.zeros(1)
         if self.additional_tokens['Tempo']:
-            self.tempos = np.linspace(*self.additional_tokens['tempo_range'], self.additional_tokens['nb_tempos'],
-                                      dtype=np.intc)
+            self.tempos = self.__create_tempos()
 
         # Rests
         self.rests = []
@@ -422,6 +421,26 @@ class MIDITokenizer:
             div //= 2
         rests += [(i, 0) for i in range(1, max_beat + 1)]
         return rests
+
+    def __create_tempos(self) -> List[Tuple]:
+        """ Creates the possible tempos, as list of integers.
+
+        The `nb_tempos` tempos are distributed in the `tempo_range`
+        using the either linear or log `tempo_scale`.
+
+        :return: the tempos
+        """
+        min_tempo, max_tempo = self.additional_tokens['tempo_range']
+        nb_tempos = self.additional_tokens['nb_tempos']
+        tempo_scale = self.additional_tokens.get('tempo_scale', 'linear')
+
+        if tempo_scale == 'linear':
+            tempos = np.linspace(min_tempo, max_tempo, nb_tempos, dtype=np.intc)
+        else:
+            tempo_quant = 1 / (np.log2(max_tempo / min_tempo) / (nb_tempos - 1))
+            tempos = np.round(2 ** (np.arange(nb_tempos) / tempo_quant) * min_tempo).astype(np.intc)
+
+        return tempos
 
     def __create_time_signatures(self) -> List[Tuple]:
         r"""Creates the possible time signatures, as tuple of the form:

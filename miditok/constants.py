@@ -17,6 +17,7 @@ ADDITIONAL_TOKENS = {'Chord': False,
                      # tempo params
                      'nb_tempos': 32,  # nb of tempo bins for additional tempo tokens, quantized like velocities
                      'tempo_range': (40, 250),  # (min_tempo, max_tempo)
+                     'tempo_scale': 'linear',  # (linear or log)
                      # time signature params
                      'time_signature_range': {4: 4}}  # {denom_i: num_i / num_list_i / (min_num_i, max_num_i)}
 
