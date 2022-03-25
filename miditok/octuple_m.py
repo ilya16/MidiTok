@@ -81,8 +81,10 @@ class OctupleM(Octuple):
         """
         # Check if the durations values have been calculated before for this time division
         if midi.ticks_per_beat not in self.durations_ticks:
-            self.durations_ticks[midi.ticks_per_beat] = np.array([(beat * res + pos) * midi.ticks_per_beat // res
-                                                                  for beat, pos, res in self.durations])
+            self.durations_ticks[midi.ticks_per_beat] = np.array([
+                (beat * res + pos) * midi.ticks_per_beat // res if res > 0 else 0
+                for beat, pos, res in self.durations
+            ])
 
         # Preprocess the MIDI file
         self.preprocess_midi(midi)
