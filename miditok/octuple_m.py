@@ -248,9 +248,8 @@ class OctupleM(Octuple):
         return events
 
     def tokens_to_midi(self, tokens: List[List[int]], _=None, output_path: Optional[str] = None,
-                       time_division: Optional[int] = TIME_DIVISION, bar_shift: Optional[int] = 0) -> MidiFile:
-        """ Override the parent class method
-        Convert multiple sequences of tokens into a multitrack MIDI and save it.
+                          time_division: Optional[int] = TIME_DIVISION, bar_shift: Optional[int] = 0) -> MidiFile:
+        """ Convert multiple sequences of tokens into a multitrack MIDI and save it.
         The tokens will be converted to event objects and then to a miditoolkit.MidiFile object.
         A time step is a list of tokens where:
             (list index: token type)
@@ -280,73 +279,128 @@ class OctupleM(Octuple):
         if not self.absolute_token_ids:
             tokens = self.to_absolute_ids(tokens, inplace=False)  # decoding works only with absolute ids
 
-        events = self.tokens_to_events(tokens[0])
-        if self.additional_tokens['Tempo']:
-            tempo = int(events[self.token_types_order['Tempo']].value)
-        else:  # default
-            tempo = TEMPO
-        tempo_changes = [TempoChange(tempo, 0)]
+        tokens = np.array(tokens) if isinstance(tokens, list) else tokens
 
-        if self.additional_tokens['TimeSignature']:
-            time_sig = self.parse_token_time_signature(events[self.token_types_order['TimeSig']].value)
-        else:  # default
-            time_sig = TIME_SIGNATURE
-        time_sig_changes = [TimeSignature(*time_sig, 0)]
-        ticks_per_bar = self.compute_ticks_per_bar(time_sig_changes[0], time_division)
-        ticks_shift = ticks_per_bar - bar_shift if bar_shift > 0 else bar_shift
+        # Time values
+        bars = tokens[:, self.token_types_order['Bar']] - self.vocab.event_to_token['Bar_0']
+        positions = tokens[:, self.token_types_order['Position']] - self.vocab.event_to_token['Position_0']
 
-        current_tempo_bar = 0
-        current_time_sig_tick = 0
-        current_time_sig_bar = 0
+        # Process Time Signature changes
+        # Compute change positions
+        time_sig_indices = np.where(np.diff(tokens[:, self.token_types_order['TimeSig']]))[0] + 1
+        time_sig_indices = np.concatenate([[0], time_sig_indices])
 
+        # Get time signatures
+        _zero_time_sig = f'TimeSig_{self.time_signatures[0][0]}/{self.time_signatures[0][1]}'
+        time_sigs = tokens[time_sig_indices, self.token_types_order['TimeSig']]
+        time_sigs = np.array(self.time_signatures)[time_sigs - self.vocab.event_to_token[_zero_time_sig]]
+
+        # Compute time signature ticks
+        ticks_per_bar = (time_division * 4 * time_sigs[:, 0] / time_sigs[:, 1]).astype(int)
+        time_sig_bars = bars[time_sig_indices]
+        time_sig_ticks = np.cumsum(ticks_per_bar[:-1] * np.diff(time_sig_bars))
+        time_sig_ticks = np.concatenate([[0], time_sig_ticks])
+
+        # Build Time Signature objects
+        time_sig_changes = [
+            TimeSignature(int(time_sigs[i][0]), int(time_sigs[i][1]), int(time_sig_ticks[i]))
+            for i in range(len(time_sigs))
+        ]
+
+        # Compute ticks for each bar
+        bar_ids = np.arange(bars[-1] + 1)
+        bar_time_sig_ids = np.searchsorted(time_sig_bars, bar_ids, side='right') - 1
+        bar_ticks = np.concatenate([[0], np.cumsum(ticks_per_bar[bar_time_sig_ids])])
+
+        # Ticks shift
+        ticks_shift = ticks_per_bar[0] - bar_shift if bar_shift > 0 else bar_shift
+        if ticks_shift > 0:
+            _second_time_sig_bar = time_sig_bars[1] if len(time_sig_bars) > 1 else bar_ids[-1]
+            bar_ticks[bar_ticks < _second_time_sig_bar] = np.maximum(
+                0, bar_ticks[bar_ticks < _second_time_sig_bar] - ticks_shift
+            )
+
+        # Compute note positions in ticks
+        note_on_ticks = bar_ticks[bars] + positions * ticks_per_sample
+
+        # Note attributes
+        _zero_pitch = f'Pitch_{self.pitch_range[0]}'
+        pitches = tokens[:, self.token_types_order['Pitch']] - self.vocab.event_to_token[_zero_pitch]
+        pitches += self.pitch_range[0]
+
+        _zero_velocity = f'Velocity_{self.velocities[0]}'
+        velocities = tokens[:, self.token_types_order['Velocity']] - self.vocab.event_to_token[_zero_velocity]
+        velocities = self.velocities[velocities]
+
+        _zero_duration = f'Duration_{".".join(map(str, self.durations[0]))}'
+        durations = tokens[:, self.token_types_order['Duration']] - self.vocab.event_to_token[_zero_duration]
+
+        if time_division not in self.durations_ticks:
+            self.durations_ticks[time_division] = np.array([
+                (beat * res + pos) * midi.ticks_per_beat // res if res > 0 else 0
+                for beat, pos, res in self.durations
+            ])
+
+        durations = self.durations_ticks[time_division][durations]
+        note_off_ticks = note_on_ticks + durations
+
+        # Process Tempo changes
+        tempo_indices = np.where(np.diff(tokens[:, self.token_types_order['Tempo']]))[0] + 1
+        tempo_indices = np.concatenate([[0], tempo_indices])
+
+        tempos = tokens[tempo_indices, self.token_types_order['Tempo']]
+        tempos = self.tempos[tempos - self.vocab.event_to_token[f'Tempo_{int(self.tempos[0])}']]
+
+        if len(tempos) > 0:
+            # Compute beat positions to tie Tempo change to them
+            num_beats_in_bar = time_sigs[:, 0]
+            num_beats_in_bar[num_beats_in_bar == 6] = 2
+            num_beats_in_bar[np.isin(num_beats_in_bar, (9, 18))] = 3
+            num_beats_in_bar[np.isin(num_beats_in_bar, (12, 24))] = 4
+            ticks_per_beat = ticks_per_bar / num_beats_in_bar
+
+            max_beat = np.sum(np.diff(np.concatenate([time_sig_bars, [bars[-1] + 1]])) * num_beats_in_bar)
+            beat_ids = np.arange(max_beat + 1)
+            beat_time_sig_ids = np.searchsorted(time_sig_bars, beat_ids, side='right') - 1
+            beat_ticks = np.concatenate([[0], np.cumsum(ticks_per_beat[beat_time_sig_ids])])
+
+            # Tempo ticks and Tempo changes
+            tempo_ticks = note_on_ticks[tempo_indices]  # Note: position at the start of the beat
+            tempo_ticks = beat_ticks[np.searchsorted(beat_ticks, tempo_ticks)]
+            tempo_ticks[0] = 0
+        else:
+            tempo_ticks = [0]
+
+        tempo_changes = [
+            TempoChange(int(tempos[i]), int(tempo_ticks[i]))
+            for i in range(len(tempos))
+        ]
+
+        # Process Programs
+        if self.additional_tokens['Program']:
+            _zero_program = f'Program_0'
+            programs = tokens[:, self.token_types_order['Program']] - self.vocab.event_to_token[_zero_program]
+        else:
+            programs = np.zeros_like(pitches)
+
+        # Create Notes
         if self.additional_tokens['Program']:
             tracks = dict([(n, []) for n in range(-1, 128)])
+
+            for program in np.unique(programs):
+                program_ids = np.where(programs == program)[0]
+                tracks[int(program)] = [
+                    Note(vel, pitch, start, end)
+                    for vel, pitch, start, end in zip(
+                        velocities[program_ids], pitches[program_ids],
+                        note_on_ticks[program_ids], note_off_ticks[program_ids]
+                    )
+                ]
         else:
-            tracks = {0: []}
-
-        for time_step in tokens:
-            events = self.tokens_to_events(time_step)
-
-            # Note attributes
-            pitch = int(events[self.token_types_order['Pitch']].value)
-            vel = int(events[self.token_types_order['Velocity']].value)
-            duration = self._token_duration_to_ticks(events[self.token_types_order['Duration']].value, time_division)
-
-            # Time values
-            current_bar = int(events[self.token_types_order['Bar']].value)
-            current_pos = int(events[self.token_types_order['Position']].value)
-            current_bar_tick = current_time_sig_tick + (current_bar - current_time_sig_bar) * ticks_per_bar
-            current_tick = current_bar_tick + current_pos * ticks_per_sample
-
-            if ticks_shift > 0:
-                current_bar_tick = max(0, current_bar_tick - ticks_shift)
-                current_tick = max(0, current_tick - ticks_shift)
-
-            # Track
-            program = 0
-            if self.additional_tokens['Program']:
-                program = int(events[self.token_types_order['Program']].value)
-
-            # Append the created note
-            tracks[program].append(Note(vel, pitch, current_tick, current_tick + duration))
-
-            # Tempo, adds a TempoChange if necessary
-            if self.additional_tokens['Tempo']:
-                tempo = int(events[self.token_types_order['Tempo']].value)
-                if current_bar > current_tempo_bar and tempo != tempo_changes[-1].tempo:
-                    current_tempo_bar = current_bar
-                    tempo_changes.append(TempoChange(tempo, current_bar_tick))  # position at the start of the bar
-
-            # Time Signature, adds a TimeSignatureChange if necessary
-            if self.additional_tokens['TimeSignature']:
-                time_sig = self.parse_token_time_signature(events[self.token_types_order['TimeSig']].value)
-                if time_sig != (time_sig_changes[-1].numerator, time_sig_changes[-1].denominator):
-                    current_time_sig_tick = current_bar_tick
-                    current_time_sig_bar = current_bar
-                    time_sig = TimeSignature(*time_sig, current_time_sig_tick)
-                    ticks_per_bar = self.compute_ticks_per_bar(time_sig, time_division)
-                    ticks_shift = 0
-                    time_sig_changes.append(time_sig)
+            tracks = {0: [
+                Note(velocities[i], pitches[i], note_on_ticks[i], note_off_ticks[i])
+                for i in range(len(pitches))
+            ]}
 
         # Tempos
         midi.tempo_changes = tempo_changes
