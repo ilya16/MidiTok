@@ -47,7 +47,7 @@ def test_multitrack_midi_to_tokens_to_midi(data_path: Union[str, Path, PurePath]
     times quantized, and maybe a some duplicated notes removed
 
     """
-    encodings = ['REMI', 'CPWord', 'Octuple', 'OctupleM', 'OctupleMono', 'MuMIDI']
+    encodings = ['REMI', 'CPWord', 'Octuple', 'OctupleMono', 'MuMIDI']
     files = list(Path(data_path).glob('**/*.mid'))
     at_least_one_error = False
 
