@@ -28,18 +28,20 @@ class Octuple(MIDITokenizer):
             The values are the resolution, in samples per beat, of the given range, ex 8
     :param nb_velocities: number of velocity bins
     :param additional_tokens: specifies additional tokens (time signature, tempo)
+    :param max_bar_embedding: maximum bar embedding (might increase during encoding)
     :param sos_eos_tokens: adds Start Of Sequence (SOS) and End Of Sequence (EOS) tokens to the vocabulary
     :param mask: will add a MASK token to the vocabulary (default: False)
     :param params: can be a path to the parameter (json encoded) file or a dictionary
     """
     def __init__(self, pitch_range: range = PITCH_RANGE, beat_res: Dict[Tuple[int, int], int] = BEAT_RES,
                  nb_velocities: int = NB_VELOCITIES, additional_tokens: Dict[str, bool] = ADDITIONAL_TOKENS,
-                 programs: List[int] = None, sos_eos_tokens: bool = False, mask: bool = False, params=None):
+                 max_bar_embedding: int = 60, programs: List[int] = None, sos_eos_tokens: bool = False,
+                 mask: bool = False, params=None):
         additional_tokens['Chord'] = False  # Incompatible additional token
         additional_tokens['Rest'] = False
         # used in place of positional encoding
         self.programs = list(range(-1, 128)) if programs is None else programs
-        self.max_bar_embedding = 60  # this attribute might increase during encoding
+        self.max_bar_embedding = max_bar_embedding  # this attribute might increase during encoding
         super().__init__(pitch_range, beat_res, nb_velocities, additional_tokens, sos_eos_tokens, mask, params)
 
     def save_params(self, out_dir: Union[str, Path, PurePath]):
@@ -56,6 +58,8 @@ class Octuple(MIDITokenizer):
                        'beat_res': {f'{k1}_{k2}': v for (k1, k2), v in self.beat_res.items()},
                        'nb_velocities': len(self.velocities),
                        'additional_tokens': self.additional_tokens,
+                       '_sos_eos': self._sos_eos,
+                       '_mask': self._mask,
                        'encoding': self.__class__.__name__,
                        'programs': self.programs,
                        'max_bar_embedding': self.max_bar_embedding},
