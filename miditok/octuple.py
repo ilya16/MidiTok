@@ -27,6 +27,7 @@ class Octuple(MIDITokenizer):
             The values are the resolution, in samples per beat, of the given range, ex 8
     :param nb_velocities: number of velocity bins
     :param additional_tokens: specifies additional tokens (time signature, tempo)
+    :param max_bar_embedding: maximum bar embedding (might increase during encoding)
     :param pad: will include a PAD token, used when training a model with batch of sequences of
             unequal lengths, and usually at index 0 of the vocabulary. (default: True)
     :param sos_eos: adds Start Of Sequence (SOS) and End Of Sequence (EOS) tokens to the vocabulary.
@@ -36,12 +37,13 @@ class Octuple(MIDITokenizer):
     """
     def __init__(self, pitch_range: range = PITCH_RANGE, beat_res: Dict[Tuple[int, int], int] = BEAT_RES,
                  nb_velocities: int = NB_VELOCITIES, additional_tokens: Dict[str, bool] = ADDITIONAL_TOKENS,
-                 programs: List[int] = None, pad: bool = True, sos_eos: bool = False, mask: bool = False, params=None):
+                 max_bar_embedding: int = 60, programs: List[int] = None, pad: bool = True, sos_eos: bool = False,
+                 mask: bool = False, params=None):
         additional_tokens['Chord'] = False  # Incompatible additional token
         additional_tokens['Rest'] = False
         # used in place of positional encoding
         self.programs = list(range(-1, 128)) if programs is None else programs
-        self.max_bar_embedding = 60  # this attribute might increase during encoding
+        self.max_bar_embedding = max_bar_embedding  # this attribute might increase during encoding
         super().__init__(pitch_range, beat_res, nb_velocities, additional_tokens, pad, sos_eos, mask, True,
                          params=params)
 

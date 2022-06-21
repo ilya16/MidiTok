@@ -2,16 +2,14 @@
 https://arxiv.org/abs/2106.05630
 
 """
-import copy
 import json
 import math
-from fractions import Fraction
 from pathlib import Path, PurePath
 from typing import List, Tuple, Dict, Optional, Union
 
 import numpy as np
 from miditok import Octuple
-from miditoolkit import MidiFile, Instrument, Note, TempoChange, TimeSignature, Marker
+from miditoolkit import MidiFile, Instrument, Note, TempoChange, TimeSignature
 
 from .midi_tokenizer_base import Vocabulary, Event
 from .constants import *
@@ -28,19 +26,22 @@ class OctupleM(Octuple):
             The values are the resolution, in samples per beat, of the given range, ex 8
     :param nb_velocities: number of velocity bins
     :param additional_tokens: specifies additional tokens (time signature, tempo)
-    :param absolute_token_ids: encode token ids in Vocabulary absolute values instead of token type ids
+    :param max_bar_embedding: maximum bar embedding (might increase during encoding)
     :param sos_eos_tokens: adds Start Of Sequence (SOS) and End Of Sequence (EOS) tokens to the vocabulary
-    :param mask_token: adds Mask (MASK) token to the vocabulary
+    :param mask: will add a MASK token to the vocabulary (default: False)
     :param params: can be a path to the parameter (json encoded) file or a dictionary
     """
     def __init__(self, pitch_range: range = PITCH_RANGE, beat_res: Dict[Tuple[int, int], int] = BEAT_RES,
                  nb_velocities: int = NB_VELOCITIES, additional_tokens: Dict[str, bool] = ADDITIONAL_TOKENS,
-                 absolute_token_ids: bool = True, sos_eos_tokens: bool = False, mask_token: bool = False, params=None):
-        self.absolute_token_ids = absolute_token_ids
-        super().__init__(pitch_range, beat_res, nb_velocities, additional_tokens, sos_eos_tokens, mask_token, params)
-        self._compute_token_types_indexes()
-        self.fill_unperformed_notes = True
-        self.remove_duplicates = False
+                 max_bar_embedding: int = 256, sos_eos_tokens: bool = False, mask: bool = False, params=None):
+        super().__init__(pitch_range, beat_res, nb_velocities, additional_tokens,
+                         max_bar_embedding, sos_eos_tokens, mask, params)
+        self._fill_unperformed_notes = True
+        self._remove_duplicates = False
+        self._expand_vocab_on_bar_overflow = False
+
+        self._num_reserved = 1 + int(self._mask)  # pad + (mask)
+        self._num_reserved_bar = self._num_reserved + 2 * int(self._sos_eos)  # pad + (mask) + (sos/eos)
 
     def save_params(self, out_dir: Union[str, Path, PurePath]):
         """ Override the parent class method to include additional parameter drum pitch range
@@ -56,10 +57,11 @@ class OctupleM(Octuple):
                        'beat_res': {f'{k1}_{k2}': v for (k1, k2), v in self.beat_res.items()},
                        'nb_velocities': len(self.velocities) - 1,
                        'additional_tokens': self.additional_tokens,
+                       '_sos_eos': self._sos_eos,
+                       '_mask': self._mask,
                        'encoding': self.__class__.__name__,
                        'max_bar_embedding': self.max_bar_embedding,
-                       'absolute_token_ids': self.absolute_token_ids,
-                       'remove_duplicates': self.remove_duplicates},
+                       'remove_duplicates': self._remove_duplicates},
                       outfile)
 
     def midi_to_tokens(self, midi: MidiFile) -> List[List[int]]:
@@ -93,13 +95,7 @@ class OctupleM(Octuple):
         self.current_midi_metadata = {'time_division': midi.ticks_per_beat,
                                       'tempo_changes': midi.tempo_changes,
                                       'time_sig_changes': midi.time_signature_changes,
-                                      'key_sig_changes': midi.key_signature_changes,
-                                      'bar_shift': 0}
-
-        for m in midi.markers:
-            if m.text.startswith('Anacrusis'):
-                self.current_midi_metadata['bar_shift'] = m.time
-                break
+                                      'key_sig_changes': midi.key_signature_changes}
 
         # Convert each track to tokens
         tokens = []
@@ -110,30 +106,18 @@ class OctupleM(Octuple):
 
         # Convert pitch events into tokens
         for time_step in tokens:
-            time_step[2] = self.vocab.event_to_token[f'{time_step[2].type}_{time_step[2].value}']
-
-        if not self.absolute_token_ids:
-            tokens = self.to_type_ids(tokens, inplace=True)  # encoding works only with absolute ids
+            time_step[2] = self.vocab[2].event_to_token[f'{time_step[2].type}_{time_step[2].value}']
 
         return tokens
 
     def preprocess_midi(self, midi: MidiFile):
         """ Will process a MIDI file to be used by the OctupleM encoding.
-        Processes anacrusis and first downbeat, adds unperformed notes on a new track.
+        Adds unperformed notes on a new track.
 
         :param midi: MIDI object to preprocess
         """
-        # Process anacrusis if any
-        for m in midi.markers:
-            if m.text.startswith('Anacrusis'):
-                num, denom = map(int, m.text.split('_')[-1].split('/'))
-                time_sig = midi.time_signature_changes[0]
-                if (num, denom) != (time_sig.numerator, time_sig.denominator):
-                    midi.time_signature_changes = midi.time_signature_changes[1:]
-                break
-
         # Insert unperformed notes on a new track
-        if self.fill_unperformed_notes and midi.instruments[-1].name != 'Unperformed Notes':
+        if self._fill_unperformed_notes and midi.instruments[-1].name != 'Unperformed Notes':
             notes = []
             for m in midi.markers:
                 if m.text.startswith('NoteS'):
@@ -171,6 +155,7 @@ class OctupleM(Octuple):
         events = []
         current_tick = -1
         current_bar = -1
+        current_bar_addon = 0
         current_pos = -1
         current_tempo_idx = 0
         current_tempo = self.current_midi_metadata['tempo_changes'][current_tempo_idx].tempo
@@ -180,32 +165,33 @@ class OctupleM(Octuple):
         current_time_sig = self.current_midi_metadata['time_sig_changes'][current_time_sig_idx]
         ticks_per_bar = self.compute_ticks_per_bar(current_time_sig, time_division)
 
-        bar_shift = self.current_midi_metadata['bar_shift']
-
         for note in track.notes:
             # Positions and bars
             if note.start != current_tick:
-                pos_index = int(((note.start - current_time_sig_tick - bar_shift) % ticks_per_bar) / ticks_per_sample)
+                pos_index = int(((note.start - current_time_sig_tick) % ticks_per_bar) / ticks_per_sample)
                 current_tick = note.start
-                current_bar = current_time_sig_bar + (current_tick - current_time_sig_tick - bar_shift) // ticks_per_bar
-                if bar_shift > 0:
-                    current_bar += 1
+                current_bar = current_time_sig_bar + (current_tick - current_time_sig_tick) // ticks_per_bar
                 current_pos = pos_index
 
                 # Check bar embedding limit, update if needed
                 if self.max_bar_embedding <= current_bar:
-                    self.vocab.add_event(f'Bar_{i}' for i in range(self.max_bar_embedding, current_bar + 1))
-                    self.max_bar_embedding = current_bar + 1
+                    if self._expand_vocab_on_bar_overflow:
+                        self.vocab[0].add_event(f'Bar_{i}' for i in range(self.max_bar_embedding, current_bar + 1))
+                        self.max_bar_embedding = current_bar + 1
+                        current_bar_addon = 0
+                    else:
+                        current_bar_addon = current_bar - self.max_bar_embedding + 1
+                        current_bar = self.max_bar_embedding - 1
 
             # Note attributes
             duration = note.end - note.start
             dur_index = np.argmin(np.abs(dur_bins - duration))
-            event = [self.vocab.event_to_token[f'Bar_{current_bar}'],
-                     self.vocab.event_to_token[f'Position_{current_pos}'],
+            event = [self.vocab[0].event_to_token[f'Bar_{current_bar}'] + current_bar_addon,
+                     self.vocab[1].event_to_token[f'Position_{current_pos}'],
                      Event(type_='Pitch', time=note.start, value=note.pitch,
                            desc=-1 if track.is_drum else track.program),
-                     self.vocab.event_to_token[f'Velocity_{note.velocity}'],
-                     self.vocab.event_to_token[f'Duration_{".".join(map(str, self.durations[dur_index]))}']]
+                     self.vocab[3].event_to_token[f'Velocity_{note.velocity}'],
+                     self.vocab[4].event_to_token[f'Duration_{".".join(map(str, self.durations[dur_index]))}']]
 
             # (Tempo)
             if self.additional_tokens['Tempo']:
@@ -219,7 +205,7 @@ class OctupleM(Octuple):
                             current_tempo_idx += 1  # update tempo value (might not change) and index
                         elif tempo_change.time > note.start:
                             break  # this tempo change is beyond the current time step, we break the loop
-                event.append(self.vocab.event_to_token[f'Tempo_{current_tempo}'])
+                event.append(self.vocab[self.token_types_order['Tempo']].event_to_token[f'Tempo_{current_tempo}'])
 
             # (TimeSignature)
             if self.additional_tokens['TimeSignature']:
@@ -234,21 +220,24 @@ class OctupleM(Octuple):
                             current_time_sig_bar += (time_sig.time - current_time_sig_tick) // ticks_per_bar
                             current_time_sig_tick = time_sig.time
                             ticks_per_bar = self.compute_ticks_per_bar(time_sig, time_division)
-                            bar_shift = 0  # only for the first time signature
                         elif time_sig.time > note.start:
                             break  # this time signature change is beyond the current time step, we break the loop
-                event.append(self.vocab.event_to_token[f'TimeSig_{current_time_sig.numerator}/{current_time_sig.denominator}'])
+                event.append(self.vocab[self.token_types_order['TimeSig']].event_to_token[
+                    f'TimeSig_{current_time_sig.numerator}/{current_time_sig.denominator}'
+                ])
 
             # (Program)
             if self.additional_tokens['Program']:
-                event.append(self.vocab.event_to_token[f'Program_{-1 if track.is_drum else track.program}'])
+                event.append(self.vocab[self.token_types_order['Program']].event_to_token[
+                    f'Program_{-1 if track.is_drum else track.program}'
+                ])
 
             events.append(event)
 
         return events
 
     def tokens_to_midi(self, tokens: List[List[int]], _=None, output_path: Optional[str] = None,
-                          time_division: Optional[int] = TIME_DIVISION, bar_shift: Optional[int] = 0) -> MidiFile:
+                       time_division: Optional[int] = TIME_DIVISION) -> MidiFile:
         """ Convert multiple sequences of tokens into a multitrack MIDI and save it.
         The tokens will be converted to event objects and then to a miditoolkit.MidiFile object.
         A time step is a list of tokens where:
@@ -268,7 +257,6 @@ class OctupleM(Octuple):
         :param output_path: path to save the file (with its name, e.g. music.mid),
                         leave None to not save the file
         :param time_division: MIDI time division / resolution, in ticks/beat (of the MIDI to create)
-        :param bar_shift: shift of the second bar in ticks/beat (of the MIDI to create)
         :return: the midi object (miditoolkit.MidiFile)
         """
         assert time_division % max(self.beat_res.values()) == 0, \
@@ -276,24 +264,21 @@ class OctupleM(Octuple):
         midi = MidiFile(ticks_per_beat=time_division)
         ticks_per_sample = time_division // max(self.beat_res.values())
 
-        if not self.absolute_token_ids:
-            tokens = self.to_absolute_ids(tokens, inplace=False)  # decoding works only with absolute ids
-
         tokens = np.array(tokens) if isinstance(tokens, list) else tokens
 
         # Time values
-        bars = tokens[:, self.token_types_order['Bar']] - self.vocab.event_to_token['Bar_0']
-        positions = tokens[:, self.token_types_order['Position']] - self.vocab.event_to_token['Position_0']
+        bars = tokens[:, self.token_types_order['Bar']] - self.zero_bar_token
+        positions = tokens[:, self.token_types_order['Position']] - self.zero_token
 
         # Process Time Signature changes
         # Compute change positions
-        time_sig_indices = np.where(np.diff(tokens[:, self.token_types_order['TimeSig']]))[0] + 1
+        time_sig_idx = self.token_types_order['TimeSig']
+        time_sig_indices = np.where(np.diff(tokens[:, time_sig_idx]))[0] + 1
         time_sig_indices = np.concatenate([[0], time_sig_indices])
 
         # Get time signatures
-        _zero_time_sig = f'TimeSig_{self.time_signatures[0][0]}/{self.time_signatures[0][1]}'
-        time_sigs = tokens[time_sig_indices, self.token_types_order['TimeSig']]
-        time_sigs = np.array(self.time_signatures)[time_sigs - self.vocab.event_to_token[_zero_time_sig]]
+        time_sigs = tokens[time_sig_indices, time_sig_idx]
+        time_sigs = np.array(self.time_signatures)[time_sigs - self.zero_token]
 
         # Compute time signature ticks
         ticks_per_bar = (time_division * 4 * time_sigs[:, 0] / time_sigs[:, 1]).astype(int)
@@ -312,28 +297,17 @@ class OctupleM(Octuple):
         bar_time_sig_ids = np.searchsorted(time_sig_bars, bar_ids, side='right') - 1
         bar_ticks = np.concatenate([[0], np.cumsum(ticks_per_bar[bar_time_sig_ids])])
 
-        # Ticks shift
-        ticks_shift = ticks_per_bar[0] - bar_shift if bar_shift > 0 else bar_shift
-        if ticks_shift > 0:
-            _second_time_sig_bar = time_sig_bars[1] if len(time_sig_bars) > 1 else bar_ids[-1]
-            bar_ticks[bar_ticks < _second_time_sig_bar] = np.maximum(
-                0, bar_ticks[bar_ticks < _second_time_sig_bar] - ticks_shift
-            )
-
         # Compute note positions in ticks
         note_on_ticks = bar_ticks[bars] + positions * ticks_per_sample
 
         # Note attributes
-        _zero_pitch = f'Pitch_{self.pitch_range[0]}'
-        pitches = tokens[:, self.token_types_order['Pitch']] - self.vocab.event_to_token[_zero_pitch]
+        pitches = tokens[:, self.token_types_order['Pitch']] - self.zero_token
         pitches += self.pitch_range[0]
 
-        _zero_velocity = f'Velocity_{self.velocities[0]}'
-        velocities = tokens[:, self.token_types_order['Velocity']] - self.vocab.event_to_token[_zero_velocity]
+        velocities = tokens[:, self.token_types_order['Velocity']] - self.zero_token
         velocities = self.velocities[velocities]
 
-        _zero_duration = f'Duration_{".".join(map(str, self.durations[0]))}'
-        durations = tokens[:, self.token_types_order['Duration']] - self.vocab.event_to_token[_zero_duration]
+        durations = tokens[:, self.token_types_order['Duration']] - self.zero_token
 
         if time_division not in self.durations_ticks:
             self.durations_ticks[time_division] = np.array([
@@ -345,11 +319,12 @@ class OctupleM(Octuple):
         note_off_ticks = note_on_ticks + durations
 
         # Process Tempo changes
-        tempo_indices = np.where(np.diff(tokens[:, self.token_types_order['Tempo']]))[0] + 1
+        tempo_idx = self.token_types_order['Tempo']
+        tempo_indices = np.where(np.diff(tokens[:, tempo_idx]))[0] + 1
         tempo_indices = np.concatenate([[0], tempo_indices])
 
-        tempos = tokens[tempo_indices, self.token_types_order['Tempo']]
-        tempos = self.tempos[tempos - self.vocab.event_to_token[f'Tempo_{int(self.tempos[0])}']]
+        tempos = tokens[tempo_indices, tempo_idx]
+        tempos = self.tempos[tempos - self.zero_token]
 
         if len(tempos) > 0:
             # Compute beat positions to tie Tempo change to them
@@ -379,7 +354,8 @@ class OctupleM(Octuple):
         # Process Programs
         if self.additional_tokens['Program']:
             _zero_program = f'Program_0'
-            programs = tokens[:, self.token_types_order['Program']] - self.vocab.event_to_token[_zero_program]
+            program_idx = self.token_types_order['Program']
+            programs = tokens[:, program_idx] - self.zero_token
         else:
             programs = np.zeros_like(pitches)
 
@@ -406,15 +382,6 @@ class OctupleM(Octuple):
         midi.tempo_changes = tempo_changes
 
         # Time Signatures
-        if bar_shift > 0:
-            time_sig = time_sig_changes[0]
-            ticks_per_bar = self.compute_ticks_per_bar(time_sig, time_division)
-            cut_time_sig = Fraction(time_sig.numerator / time_sig.denominator * bar_shift / ticks_per_bar)
-            cut_time_sig = cut_time_sig.limit_denominator(64)
-            time_sig_changes.insert(0, TimeSignature(cut_time_sig.numerator, cut_time_sig.denominator, 0))
-            time_sig.time = bar_shift
-            midi.markers = [Marker(text=f'Anacrusis_{time_sig.numerator}/{time_sig.denominator}', time=bar_shift)]
-
         midi.time_signature_changes = time_sig_changes
 
         # Appends created notes to MIDI object
@@ -427,61 +394,56 @@ class OctupleM(Octuple):
                 midi.instruments.append(Instrument(int(program), False, MIDI_INSTRUMENTS[int(program)]['name']))
             midi.instruments[-1].notes = notes
 
+        midi.max_tick = note_off_ticks.max() + 1
+
         # Write MIDI file
         if output_path:
             Path(output_path).mkdir(parents=True, exist_ok=True)
             midi.dump(output_path)
         return midi
 
-    def _create_vocabulary(self, sos_eos_tokens: bool = False, mask_token: bool = False) -> Vocabulary:
+    def _create_vocabulary(self) -> List[Vocabulary]:
         """ Creates the Vocabulary object of the tokenizer.
         See the docstring of the Vocabulary class for more details about how to use it.
         NOTE: token index 0 is often used as a padding index during training
 
-        :param sos_eos_tokens: will include Start Of Sequence (SOS) and End Of Sequence (tokens)
-        :param mask_token: will include Mask (MASK) token
         :return: the vocabulary object
         """
-        vocab = Vocabulary({'PAD_None': 0})
+        vocab = [Vocabulary({'PAD_None': 0}, sos_eos=self._sos_eos and i == 0, mask=self._mask) for i in range(5)]
 
-        # MASK
-        if mask_token:
-            vocab.add_mask()
-
-        # SOS & EOS
-        if sos_eos_tokens:
-            vocab.add_sos_eos()
-
-        # PITCH
-        vocab.add_event(f'Pitch_{i}' for i in self.pitch_range)
-
-        # VELOCITY
-        self.velocities = np.concatenate(([0], self.velocities))  # allow 0 velocity (unperformed note)
-        vocab.add_event(f'Velocity_{i}' for i in self.velocities)
-
-        # DURATION
-        self.durations = [(0, 0, 0)] + self.durations  # allow 0 duration
-        vocab.add_event(f'Duration_{".".join(map(str, duration))}' for duration in self.durations)
+        # BAR
+        vocab[0].add_event(f'Bar_{i}' for i in range(self.max_bar_embedding))  # bar embeddings (positional encoding)
 
         # POSITION
         max_nb_beats = max(map(lambda ts: math.ceil(4 * ts[0] / ts[1]), self.time_signatures))
         nb_positions = max(self.beat_res.values()) * max_nb_beats
-        vocab.add_event(f'Position_{i}' for i in range(nb_positions))
+        vocab[1].add_event(f'Position_{i}' for i in range(nb_positions))
+
+        # PITCH
+        vocab[2].add_event(f'Pitch_{i}' for i in self.pitch_range)
+
+        # VELOCITY
+        self.velocities = np.concatenate(([0], self.velocities))  # allow 0 velocity (unperformed note)
+        vocab[3].add_event(f'Velocity_{i}' for i in self.velocities)
+
+        # DURATION
+        self.durations = [(0, 0, 0)] + self.durations  # allow 0 duration
+        vocab[4].add_event(f'Duration_{".".join(map(str, duration))}' for duration in self.durations)
 
         # TEMPO
         if self.additional_tokens['Tempo']:
-            vocab.add_event(f'Tempo_{i}' for i in self.tempos)
+            vocab.append(Vocabulary({'PAD_None': 0}, mask=self._mask))
+            vocab[-1].add_event(f'Tempo_{i}' for i in self.tempos)
 
         # TIME_SIGNATURE
         if self.additional_tokens['TimeSignature']:
-            vocab.add_event(f'TimeSig_{i[0]}/{i[1]}' for i in self.time_signatures)
+            vocab.append(Vocabulary({'PAD_None': 0}, mask=self._mask))
+            vocab[-1].add_event(f'TimeSig_{i[0]}/{i[1]}' for i in self.time_signatures)
 
         # PROGRAM
         if self.additional_tokens['Program']:
-            vocab.add_event(f'Program_{program}' for program in range(-1, 128))
-
-        # BAR --- MUST BE LAST IN DIC AS THIS MIGHT BE INCREASED
-        vocab.add_event(f'Bar_{i}' for i in range(self.max_bar_embedding))  # bar embeddings (positional encoding)
+            vocab.append(Vocabulary({'PAD_None': 0}, mask=self._mask))
+            vocab[-1].add_event(f'Program_{program}' for program in range(-1, 128))
 
         self._compute_token_types_order()
 
@@ -508,62 +470,6 @@ class OctupleM(Octuple):
 
         self.token_types_order = token_types_order
 
-    def _compute_token_types_indexes(self):
-        """ Computes token type index ranges for absolute and type index encodings."""
-        self._absolute_token_types_indexes = self.vocab._token_types_indexes
-
-        mask_token = 'MASK' in self._absolute_token_types_indexes
-        sos_eos_tokens = 'SOS' and 'EOS' in self._absolute_token_types_indexes
-
-        self._token_types_indexes = copy.copy(self._absolute_token_types_indexes)
-        for token_type, abs_token_indexes in self._absolute_token_types_indexes.items():
-            if token_type in self.token_types_order:
-                min_index = abs_token_indexes[0]
-                index_shift = 1 + int(mask_token) + 2 * int(token_type == 'Bar' and sos_eos_tokens)
-                self._token_types_indexes[token_type] = [idx - min_index + index_shift for idx in abs_token_indexes]
-
-    def _convert_tokens(self, tokens: List[List[int]], to_absolute: bool = False,
-                        inplace: bool = False) -> List[List[int]]:
-        """ Converts a token sequence between absolute and type ids.
-
-        :param tokens: sequence of tokens to be converted
-        :param to_absolute: convert from type to absolute ids, otherwise from absolute to type ids
-        :param inplace: modify the sequence inplace
-        :return: sequence of converted tokens
-        """
-        tokens = tokens if inplace else copy.deepcopy(tokens)
-
-        source_indexes = self._token_types_indexes if to_absolute else self._absolute_token_types_indexes
-        target_indexes = self._absolute_token_types_indexes if to_absolute else self._token_types_indexes
-
-        for token_type, token_type_index in self.token_types_order.items():
-            index_shift = target_indexes[token_type][0] - source_indexes[token_type][0]
-            for time_step in tokens:
-                if time_step[token_type_index] >= source_indexes[token_type][0]:
-                    time_step[token_type_index] += index_shift
-
-        return tokens
-
-    def to_type_ids(self, tokens: List[List[int]], inplace: bool = False) -> List[List[int]]:
-        """ Converts a token sequence with absolute token ids
-        into a token sequence with token type absolute token ids.
-
-        :param tokens: sequence of tokens to be converted
-        :param inplace: modify the sequence inplace
-        :return: sequence of converted tokens
-        """
-        return self._convert_tokens(tokens, to_absolute=False, inplace=inplace)
-
-    def to_absolute_ids(self, tokens: List[List[int]], inplace: bool = False) -> List[List[int]]:
-        """ Converts a token sequence with absolute token ids
-        into a token sequence with token type absolute token ids.
-
-        :param tokens: sequence of tokens to be converted
-        :param inplace: modify the sequence inplace
-        :return: sequence of converted tokens
-        """
-        return self._convert_tokens(tokens, to_absolute=True, inplace=inplace)
-
     def token_types_errors(self, tokens: List[List[int]]) -> float:
         """ Checks if a sequence of tokens is constituted of good token values and
         returns the error ratio (lower is better).
@@ -580,11 +486,14 @@ class OctupleM(Octuple):
         current_bar = current_pos = -1
         current_pitches = []
 
+        bar_idx = self.token_types_order['Bar']
+        pos_idx = self.token_types_order['Position']
+        pitch_idx = self.token_types_order['Pitch']
         for token in tokens:
             has_error = False
-            bar_value = int(self.vocab.token_to_event[token[self.token_types_order['Bar']]].split('_')[1])
-            pos_value = int(self.vocab.token_to_event[token[self.token_types_order['Position']]].split('_')[1])
-            pitch_value = int(self.vocab.token_to_event[token[self.token_types_order['Pitch']]].split('_')[1])
+            bar_value = int(self.vocab[bar_idx].token_to_event[token[bar_idx]].split('_')[1])
+            pos_value = int(self.vocab[pos_idx].token_to_event[token[pos_idx]].split('_')[1])
+            pitch_value = int(self.vocab[pitch_idx].token_to_event[token[pitch_idx]].split('_')[1])
 
             # Bar
             if bar_value < current_bar:
@@ -612,29 +521,14 @@ class OctupleM(Octuple):
 
         return err / len(tokens)
 
-    def validate_midi_time_signatures(self, midi: MidiFile) -> bool:
-        """ Checks if MIDI files contains only time signatures supported by the encoding.
+    @property
+    def sizes(self):
+        return {k: len(v) for k, v in zip(self.token_types_order, self.vocab)}
 
-        :param midi: MIDI file
-        :return: boolean indicating whether MIDI file could be processed by the Encoding
-        """
-        time_signatures = midi.time_signature_changes
-        if contains_anacrusis(midi):  # hide anacrusis' time signature
-            midi.time_signature_changes = time_signatures[1:]
+    @property
+    def zero_token(self):
+        return self._num_reserved
 
-        is_valid = super().validate_midi_time_signatures(midi)
-        midi.time_signature_changes = time_signatures
-
-        return is_valid
-
-
-def contains_anacrusis(midi: MidiFile):
-    """ Checks if MIDI file contains anacrusis
-
-    :param midi: MIDI file
-    :return: boolean indicating whether MIDI contains anacrusis marker
-    """
-    for m in midi.markers:
-        if m.text.startswith('Anacrusis'):
-            return True
-    return False
+    @property
+    def zero_bar_token(self):
+        return self._num_reserved_bar
