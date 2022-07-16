@@ -126,7 +126,7 @@ def one_track_midi_to_tokens_to_midi(data_path: Union[str, Path, PurePath] = './
 
             # Updates the MIDI and save it
             midi.instruments += tracks
-            midi.dump(PurePath('tests', 'test_results', file_path.name))
+            midi.dump(PurePath('test_results', file_path.name))
 
     print(f'Took {time.time() - t0} seconds')
 
@@ -134,7 +134,7 @@ def one_track_midi_to_tokens_to_midi(data_path: Union[str, Path, PurePath] = './
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description='MIDI Encoding test')
-    parser.add_argument('--data', type=str, default='tests/Maestro_MIDIs',
+    parser.add_argument('--data', type=str, default='Maestro_MIDIs',
                         help='directory of MIDI files to use for test')
     args = parser.parse_args()
     one_track_midi_to_tokens_to_midi(args.data)

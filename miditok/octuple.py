@@ -35,7 +35,7 @@ class Octuple(MIDITokenizer):
     """
     def __init__(self, pitch_range: range = PITCH_RANGE, beat_res: Dict[Tuple[int, int], int] = BEAT_RES,
                  nb_velocities: int = NB_VELOCITIES, additional_tokens: Dict[str, bool] = ADDITIONAL_TOKENS,
-                 max_bar_embedding: int = 60, programs: List[int] = None, sos_eos_tokens: bool = False,
+                 programs: List[int] = None, max_bar_embedding: int = 60, sos_eos_tokens: bool = False,
                  mask: bool = False, params=None):
         additional_tokens['Chord'] = False  # Incompatible additional token
         additional_tokens['Rest'] = False
@@ -150,7 +150,7 @@ class Octuple(MIDITokenizer):
         current_time_sig_tick = 0
         current_time_sig_bar = 0
         current_time_sig = self.current_midi_metadata['time_sig_changes'][current_time_sig_idx]
-        ticks_per_bar = self.compute_ticks_per_bar(current_time_sig, time_division)
+        ticks_per_bar = self._compute_ticks_per_bar(current_time_sig, time_division)
 
         for note in track.notes:
             # Positions and bars
@@ -197,7 +197,7 @@ class Octuple(MIDITokenizer):
                             current_time_sig_idx += 1  # update time signature value (might not change) and index
                             current_time_sig_bar += (time_sig.time - current_time_sig_tick) // ticks_per_bar
                             current_time_sig_tick = time_sig.time
-                            ticks_per_bar = self.compute_ticks_per_bar(time_sig, time_division)
+                            ticks_per_bar = self._compute_ticks_per_bar(time_sig, time_division)
                         elif time_sig.time > note.start:
                             break  # this time signature change is beyond the current time step, we break the loop
                 event.append(self.vocab[-1].event_to_token[f'TimeSig_{current_time_sig.numerator}/{current_time_sig.denominator}'])
@@ -246,11 +246,12 @@ class Octuple(MIDITokenizer):
         if self.additional_tokens['TimeSignature']:
             for i in range(len(events)):
                 if events[i][-1].value != 'None':
-                    time_sig = self.parse_token_time_signature(events[i][-1].value)
+                    time_sig = self._parse_token_time_signature(events[i][-1].value)
                     break
 
-        ticks_per_bar = self.compute_ticks_per_bar(time_sig, time_division)
-        time_sig_changes = [TimeSignature(*time_sig, 0)]
+        time_sig = TimeSignature(*time_sig, 0)
+        ticks_per_bar = self._compute_ticks_per_bar(time_sig, time_division)
+        time_sig_changes = [time_sig]
 
         current_time_sig_tick = 0
         current_time_sig_bar = 0
@@ -283,12 +284,12 @@ class Octuple(MIDITokenizer):
 
             # Time Signature, adds a TimeSignatureChange if necessary
             if self.additional_tokens['TimeSignature'] and time_step[-1].value != 'None':
-                time_sig = self.parse_token_time_signature(time_step[-1].value)
+                time_sig = self._parse_token_time_signature(time_step[-1].value)
                 if time_sig != (time_sig_changes[-1].numerator, time_sig_changes[-1].denominator):
                     current_time_sig_tick += (current_bar - current_time_sig_bar) * ticks_per_bar
                     current_time_sig_bar = current_bar
                     time_sig = TimeSignature(*time_sig, current_time_sig_tick)
-                    ticks_per_bar = self.compute_ticks_per_bar(time_sig, time_division)
+                    ticks_per_bar = self._compute_ticks_per_bar(time_sig, time_division)
                     time_sig_changes.append(time_sig)
 
         # Tempos

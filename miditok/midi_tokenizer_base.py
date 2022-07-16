@@ -292,7 +292,7 @@ class MIDITokenizer:
         :param time_sigs: time signature changes to quantize
         :param time_division: MIDI time division / resolution, in ticks/beat (of the MIDI being parsed)
         """
-        ticks_per_bar = MIDITokenizer.compute_ticks_per_bar(time_sigs[0], time_division)
+        ticks_per_bar = MIDITokenizer._compute_ticks_per_bar(time_sigs[0], time_division)
         current_bar = 0
         previous_tick = 0  # first time signature change is always at tick 0
         prev_time_sig = time_sigs[0]
@@ -312,7 +312,7 @@ class MIDITokenizer:
                 time_sig.time = previous_tick + bar_offset * ticks_per_bar
 
             # Update values
-            ticks_per_bar = MIDITokenizer.compute_ticks_per_bar(time_sig, time_division)
+            ticks_per_bar = MIDITokenizer._compute_ticks_per_bar(time_sig, time_division)
             current_bar += bar_offset
             previous_tick = time_sig.time
             prev_time_sig = time_sig
@@ -472,7 +472,7 @@ class MIDITokenizer:
         return time_signatures
 
     @staticmethod
-    def compute_ticks_per_bar(time_sig: TimeSignature, time_division: int):
+    def _compute_ticks_per_bar(time_sig: TimeSignature, time_division: int):
         r"""Computes time resolution of one bar in ticks.
 
         :param time_sig: time signature object

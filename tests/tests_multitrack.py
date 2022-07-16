@@ -116,7 +116,7 @@ def multitrack_midi_to_tokens_to_midi(data_path: Union[str, Path, PurePath] = '.
                           f'{encoding} ({len(time_sig_errors)} errors)')
 
             if saving_erroneous_midis and has_errors:
-                new_midi.dump(PurePath('tests', 'test_results', f'{file_path.stem}_{encoding}')
+                new_midi.dump(PurePath('test_results', f'{file_path.stem}_{encoding}')
                               .with_suffix('.mid'))
 
         bar_len = 30
@@ -150,7 +150,7 @@ def midi_to_tokens_to_midi(tokenizer: miditok.MIDITokenizer, midi: MidiFile) -> 
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description='MIDI Encoding test')
-    parser.add_argument('--data', type=str, default='tests/Multitrack_MIDIs',
+    parser.add_argument('--data', type=str, default='Multitrack_MIDIs',
                         help='directory of MIDI files to use for test')
     args = parser.parse_args()
 
