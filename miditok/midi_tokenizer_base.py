@@ -451,12 +451,15 @@ class MIDITokenizer(ABC):
         min_tempo, max_tempo = self.additional_tokens['tempo_range']
         nb_tempos = self.additional_tokens['nb_tempos']
         tempo_scale = self.additional_tokens.get('tempo_scale', 'linear')
+        tempo_dtype = self.additional_tokens.get('tempo_dtype', 'int')
 
         if tempo_scale == 'linear':
-            tempos = np.linspace(min_tempo, max_tempo, nb_tempos, dtype=np.intc)
+            tempos = np.linspace(min_tempo, max_tempo, nb_tempos)
         else:
             tempo_quant = 1 / (np.log2(max_tempo / min_tempo) / (nb_tempos - 1))
-            tempos = np.round(2 ** (np.arange(nb_tempos) / tempo_quant) * min_tempo).astype(np.intc)
+            tempos = 2 ** (np.arange(nb_tempos) / tempo_quant) * min_tempo
+
+        tempos = tempos.astype(np.intc) if tempo_dtype == 'int' else tempos.round(3)
 
         return tempos
 
