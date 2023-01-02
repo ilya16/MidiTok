@@ -23,7 +23,7 @@ setup(
         'mir'
     ],
     install_requires=[
-        'numpy>=1.19,<1.24',
+        'numpy>=1.19',
         'miditoolkit>=0.1.16',
         'tqdm'
     ],

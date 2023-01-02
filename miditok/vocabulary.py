@@ -54,10 +54,10 @@ class Vocabulary:
         # Adds (if specified) special tokens first
         if pad:
             self.__add_pad()
-        if sos_eos:
-            self.__add_sos_eos()
         if mask:
             self.__add_mask()
+        if sos_eos:
+            self.__add_sos_eos()
 
         # Add custom events and updates _token_types_indexes
         if events is not None:

@@ -73,7 +73,7 @@ def test_multitrack_midi_to_tokens_to_midi(data_path: Union[str, Path, PurePath]
                     track.program = 0  # need to be done before sorting tracks per program
             # Sort and merge tracks if needed
             # MIDI produced with Octuple contains tracks ordered by program
-            if encoding == 'Octuple' or encoding == 'OctupleM' or encoding == 'MuMIDI':
+            if encoding == 'Octuple' or encoding == 'MuMIDI':
                 miditok.utils.merge_same_program_tracks(midi_to_compare.instruments)  # merge tracks
             for track in midi_to_compare.instruments:  # reduce the duration of notes to long
                 reduce_note_durations(track.notes, max(tu[1] for tu in BEAT_RES_TEST) * midi.ticks_per_beat)

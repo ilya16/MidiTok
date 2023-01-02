@@ -659,13 +659,14 @@ class MIDITokenizer(ABC):
         with open(out_path, 'w') as outfile:
             json.dump(params, outfile, indent=4)
 
-    def load_params(self, params: Union[str, Path, PurePath]):
+    def load_params(self, params: Union[str, Path, PurePath, Dict[str, Any]]):
         r"""Load parameters and set the encoder attributes
 
         :param params: can be a path to the parameter (json encoded) file
         """
-        with open(params) as param_file:
-            params = json.load(param_file)
+        if not isinstance(params, dict):
+            with open(params) as param_file:
+                params = json.load(param_file)
 
         params['pitch_range'] = range(*params['pitch_range'])
 
@@ -683,7 +684,7 @@ class MIDITokenizer(ABC):
 
         # when loading from params of miditok of previous versions
         if '_pad' not in params:  # miditok < v1.3.0
-            self._pad = False
+            self._pad = True
         if '_sos_eos' not in params:  # miditok < v1.2.0
             self._sos_eos = False
         if '_mask' not in params:  # miditok < v1.2.0
