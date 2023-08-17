@@ -344,9 +344,10 @@ class MIDITokenizer(ABC):
             midi.instruments[t].notes.sort(
                 key=lambda x: (x.start, x.pitch, x.end)
             )  # sort notes
-            remove_duplicated_notes(
-                midi.instruments[t].notes
-            )  # remove possible duplicated notes
+            if self.config.additional_params.get("remove_duplicates", False):
+                remove_duplicated_notes(
+                    midi.instruments[t].notes
+                )  # remove possible duplicated notes
             if len(midi.instruments[t].notes) == 0:
                 del midi.instruments[t]
                 continue
